@@ -68,6 +68,10 @@ export function OverviewPage() {
       ins: R('insurance-activity-summary'),
       pendingClaims: R('pending-claims', 'last12'),
       fac: R('facility-performance-summary'),
+      wallet: R('outstanding-credit-balances'),
+      deposits: R('deposit-balances-held'),
+      credit: R('credit-account-balances'),
+      balances: R('patient-account-balances'),
       dept: R('department-comparison'),
       cfg,
     }
@@ -155,6 +159,36 @@ export function OverviewPage() {
           return <KpiCard key={x.c.reportId + id} label={label ?? kp.label} value={kp.value} fmt={kp.fmt} delta={sub ? undefined : kp.delta} better={kp.better} spark={sub ? undefined : kp.spark} sub={sub} onClick={() => go(x)} />
         })}
       </div>
+
+      <Panel
+        title="Patient balances on account"
+        subtitle="As at 27 Oct 2026, 13:45 · money held for patients and money patients owe on credit"
+        actions={<LinkTo onClick={() => go(data.balances)} label="All patient balances" />}
+      >
+        <div className="grid gap-4 md:grid-cols-3">
+          <BalanceTile
+            label="Patient wallet balances"
+            value={k(data.wallet, 'balance').value}
+            note={`${formatValue(k(data.wallet, 'withBalance').value, 'number')} patients with a wallet balance`}
+            tone="hold"
+            onClick={() => go(data.wallet, { view: 'detailed' })}
+          />
+          <BalanceTile
+            label="Deposits held"
+            value={k(data.deposits, 'held').value}
+            note={`${formatValue(k(data.deposits, 'heldCount').value, 'number')} admission deposits held`}
+            tone="hold"
+            onClick={() => go(data.deposits, { view: 'detailed' })}
+          />
+          <BalanceTile
+            label="Patient credit owed"
+            value={k(data.credit, 'owed').value}
+            note={`${formatValue(k(data.credit, 'withBalance').value, 'number')} accounts · ${formatValue(k(data.credit, 'nearLimit').value + k(data.credit, 'overLimit').value, 'number')} near or over limit · ${formatValue(k(data.credit, 'pastTerms').value, 'currency', true)} past due`}
+            tone="owed"
+            onClick={() => go(data.credit, { view: 'detailed' })}
+          />
+        </div>
+      </Panel>
 
       <div className="grid gap-5 xl:grid-cols-3">
         <Panel title="Revenue & collections" subtitle="Net billed vs collected against those invoices" className="xl:col-span-2" actions={<LinkTo onClick={() => go(data.bill)} />}>
@@ -325,6 +359,20 @@ function LinkTo({ onClick, label = 'Open report' }: { onClick: () => void; label
   return (
     <button type="button" onClick={onClick} className="inline-flex items-center gap-1 text-[12.5px] font-medium text-brand-700 hover:underline">
       {label} <ArrowRight className="size-3.5" />
+    </button>
+  )
+}
+
+function BalanceTile({ label, value, note, tone, onClick }: { label: string; value: number; note: string; tone: 'hold' | 'owed'; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} className={cn('group flex flex-col gap-1 rounded-xl border p-4 text-left transition hover:-translate-y-px hover:shadow-md', tone === 'hold' ? 'border-[#cfe6e2] bg-[#f3faf9] hover:border-brand-300' : 'border-warning-200 bg-warning-50/60 hover:border-warning-300')}>
+      <span className="flex items-center justify-between text-[12.5px] font-medium text-neutral-600">
+        {label}
+        <ArrowRight className="size-3.5 text-neutral-300 transition group-hover:text-brand-600" />
+      </span>
+      <span className="text-[24px] font-bold tabular-nums tracking-tight text-neutral-900">{formatValue(value, 'currency', value >= 1e6)}</span>
+      <span className="text-[12px] text-neutral-500">{note}</span>
+      <span className={cn('mt-1 text-[11.5px] font-medium', tone === 'hold' ? 'text-brand-700' : 'text-warning-700')}>{tone === 'hold' ? 'Held on behalf of patients' : 'Owed to the hospital'}</span>
     </button>
   )
 }

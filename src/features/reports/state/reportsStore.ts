@@ -166,6 +166,7 @@ const SEED_SAVED: SavedReport[] = [
   { id: 'SAV-002', name: 'Weekly HMO rejections', config: cfg('rejected-claims', 'last7'), createdAt: '2026-08-11 14:02', lastOpened: '2026-10-20 10:11' },
   { id: 'SAV-003', name: 'Morning cash-up – all facilities', config: cfg('daily-collections', 'yesterday'), createdAt: '2026-07-21 07:55', lastOpened: '2026-10-26 08:05' },
   { id: 'SAV-004', name: 'Paediatrics waiting times', config: cfg('waiting-time-analysis', 'this_month', { department: 'Paediatrics' }), createdAt: '2026-09-18 12:30', lastOpened: '2026-10-22 13:44' },
+  { id: 'SAV-006', name: 'Patient balances – Lekki', config: cfg('patient-account-balances', 'this_month', { facility: 'Crestfield Lekki' }), createdAt: '2026-10-20 11:05', lastOpened: '2026-10-26 16:40' },
   { id: 'SAV-005', name: 'Expiry watch – Ikeja pharmacy', config: cfg('expiring-medication', 'this_month', { facility: 'Crestfield Ikeja' }, { view: 'detailed' }), createdAt: '2026-10-03 16:20', lastOpened: '2026-10-24 09:30' },
 ]
 
@@ -177,6 +178,7 @@ const SEED_SCHEDULES: Schedule[] = [
   { id: 'SCH-05', name: 'Low stock & expiry alert', config: cfg('inventory-low-stock', 'this_month'), frequency: 'Weekly', time: '07:30', day: 'Friday', recipients: ['pharmacy@crestfield-demo.ng', 'stores@crestfield-demo.ng'], format: 'CSV', active: true, lastRun: '2026-10-23 07:30', lastStatus: 'Delivered', createdBy: 'Pharm. Kemi Adeleke' },
   { id: 'SCH-06', name: 'Monthly board pack', config: cfg('organization-wide-summary', 'last_month'), frequency: 'Monthly', time: '09:00', day: '1st of month', recipients: ['board@crestfield-demo.ng'], format: 'PDF', active: true, lastRun: '2026-10-01 09:00', lastStatus: 'Delivered', createdBy: 'Adaeze Okonkwo' },
   { id: 'SCH-07', name: 'Monthly financial summary', config: cfg('monthly-financial-summary', 'last_month'), frequency: 'Monthly', time: '10:00', day: '2nd of month', recipients: ['finance@crestfield-demo.ng'], format: 'CSV', active: true, lastRun: '2026-10-02 10:00', lastStatus: 'Delivered', createdBy: 'Tolu Adebayo' },
+  { id: 'SCH-09', name: 'Deposits held & credit owed', config: cfg('patient-account-balances', 'this_month'), frequency: 'Daily', time: '18:00', day: 'Every day', recipients: ['finance@crestfield-demo.ng'], format: 'CSV', active: true, lastRun: '2026-10-26 18:00', lastStatus: 'Delivered', createdBy: 'Tolu Adebayo' },
   { id: 'SCH-08', name: 'Security sign-in review', config: cfg('failed-authentication', 'last7'), frequency: 'Weekly', time: '17:00', day: 'Friday', recipients: ['it.security@crestfield-demo.ng'], format: 'CSV', active: false, lastRun: '2026-09-25 17:00', lastStatus: 'Delivered', createdBy: 'Adaeze Okonkwo' },
 ]
 
@@ -274,6 +276,6 @@ export const useReportsStore = create<ReportsState>()(
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       resetDemo: () => set(initial()),
     }),
-    { name: 'reports-prototype-v1', storage: createJSONStorage(() => storage.zustandAdapter), version: 1 },
+    { name: 'reports-prototype-v2', storage: createJSONStorage(() => storage.zustandAdapter), version: 1 },
   ),
 )

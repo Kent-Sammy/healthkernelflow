@@ -573,12 +573,12 @@ const adjustments: SourceDef = {
 // ------------------------------------------------------------------ credits
 const credits: SourceDef = {
   id: 'credits',
-  label: 'Patient credit transactions',
+  label: 'Patient wallet transactions',
   rows: (db) => db.credits,
   date: (r) => r.date,
   dateLabel: 'Transaction date',
-  columns: [c('date', 'Date', 'datetime'), c('id', 'Txn ID'), c('accountId', 'Wallet'), c('patient', 'Account holder'), facilityCol, c('creditType', 'Credit type', 'status'), c('action', 'Transaction', 'status'), c('amount', 'Amount', 'currency'), c('balanceAfter', 'Balance after', 'currency'), c('reference', 'Reference'), c('by', 'Processed by')],
-  dims: [facilityDim, d('creditType', 'Credit type'), d('action', 'Transaction type'), d('by', 'Processed by'), monthDim((r) => r.date)],
+  columns: [c('date', 'Date', 'datetime'), c('id', 'Txn ID'), c('accountId', 'Wallet'), c('patient', 'Account holder'), facilityCol, c('creditType', 'Wallet funding', 'status'), c('action', 'Transaction', 'status'), c('amount', 'Amount', 'currency'), c('balanceAfter', 'Balance after', 'currency'), c('reference', 'Reference'), c('by', 'Processed by')],
+  dims: [facilityDim, d('creditType', 'Wallet funding'), d('action', 'Transaction type'), d('by', 'Processed by'), monthDim((r) => r.date)],
   measures: [
     m('txns', 'Transactions', 'number', (rs) => rs.length),
     m('issued', 'Credits issued', 'currency', (rs) => sum(rs, (r) => (r.action === 'Issued' ? r.amount : 0))),
@@ -595,7 +595,7 @@ const credits: SourceDef = {
 
 const creditAccounts: SourceDef = {
   id: 'creditAccounts',
-  label: 'Patient credit balances',
+  label: 'Patient wallet balances',
   snapshot: true,
   rows: (db) => {
     const map = new Map<string, Row>()
@@ -631,7 +631,7 @@ const creditAccounts: SourceDef = {
 
 const creditRecon: SourceDef = {
   id: 'creditRecon',
-  label: 'Credit reconciliation',
+  label: 'Wallet reconciliation',
   derive: (db, p) => {
     const map = new Map<string, Row>()
     for (const t of db.credits) {
@@ -693,6 +693,7 @@ const admissionCols = [
   c('readmission', 'Readmission ≤30d', 'status'),
   c('payerType', 'Payer type'),
   c('billed', 'Billed', 'currency'),
+  c('deposit', 'Deposit taken', 'currency'),
 ]
 const admissionDims = [
   facilityDim,
@@ -1314,7 +1315,7 @@ const dailyCollections: SourceDef = {
       const k = `${pm.date.slice(0, 10)}|${pm.facility}`
       let r = map.get(k)
       if (!r) {
-        r = { date: pm.date.slice(0, 10), facility: pm.facility, receipts: 0, cash: 0, card: 0, transfer: 0, ussd: 0, remittance: 0, credit: 0, total: 0 }
+        r = { date: pm.date.slice(0, 10), facility: pm.facility, receipts: 0, cash: 0, card: 0, transfer: 0, ussd: 0, remittance: 0, credit: 0, deposit: 0, total: 0 }
         map.set(k, r)
       }
       r.receipts++
@@ -1323,13 +1324,14 @@ const dailyCollections: SourceDef = {
       else if (pm.method === 'POS / Card') r.card += pm.amount
       else if (pm.method === 'Bank Transfer') r.transfer += pm.amount
       else if (pm.method === 'USSD / Mobile') r.ussd += pm.amount
-      else if (pm.method === 'Patient Credit') r.credit += pm.amount
+      else if (pm.method === 'Patient Wallet') r.credit += pm.amount
+      else if (pm.method === 'Deposit Applied') r.deposit += pm.amount
       else r.remittance += pm.amount
     }
     return [...map.values()].sort((a, b) => b.date.localeCompare(a.date))
   },
   date: (r) => r.date,
-  columns: [c('date', 'Date', 'date'), facilityCol, c('receipts', 'Receipts', 'number'), c('cash', 'Cash', 'currency'), c('card', 'POS / Card', 'currency'), c('transfer', 'Bank transfer', 'currency'), c('ussd', 'USSD / Mobile', 'currency'), c('credit', 'Patient credit', 'currency'), c('remittance', 'HMO / corporate', 'currency'), c('total', 'Total', 'currency')],
+  columns: [c('date', 'Date', 'date'), facilityCol, c('receipts', 'Receipts', 'number'), c('cash', 'Cash', 'currency'), c('card', 'POS / Card', 'currency'), c('transfer', 'Bank transfer', 'currency'), c('ussd', 'USSD / Mobile', 'currency'), c('credit', 'Patient wallet', 'currency'), c('deposit', 'Deposits applied', 'currency'), c('remittance', 'HMO / corporate', 'currency'), c('total', 'Total', 'currency')],
   dims: [facilityDim, weekdayDim((r) => r.date)],
   measures: [
     m('total', 'Total collected', 'currency', (rs) => sum(rs, (r) => r.total), 'up'),
@@ -1340,7 +1342,7 @@ const dailyCollections: SourceDef = {
     m('avgDay', 'Average per facility-day', 'currency', (rs) => avg(rs, (r) => r.total)),
   ],
   filters: ['facility'],
-  defaultColumns: ['date', 'facility', 'receipts', 'cash', 'card', 'transfer', 'ussd', 'credit', 'remittance', 'total'],
+  defaultColumns: ['date', 'facility', 'receipts', 'cash', 'card', 'transfer', 'ussd', 'credit', 'deposit', 'remittance', 'total'],
 }
 
 /** Book reconciliation per facility × item: opening + in − out = closing. */
@@ -1394,8 +1396,173 @@ const stockRecon: SourceDef = {
   defaultColumns: ['item', 'facility', 'opening', 'received', 'transferIn', 'consumed', 'transferOut', 'wastage', 'adjustments', 'closing', 'variance', 'status'],
 }
 
+// --------------------------------------------------------- deposits
+const depositAccounts: SourceDef = {
+  id: 'depositAccounts',
+  label: 'Admission deposits',
+  rows: (db) => db.deposits,
+  date: (r) => r.collectedOn,
+  dateLabel: 'Date collected',
+  columns: [c('collectedOn', 'Collected', 'datetime'), c('id', 'Deposit no.'), c('admissionId', 'Admission no.'), c('patient', 'Patient'), facilityCol, c('ward', 'Ward'), c('collected', 'Initial deposit', 'currency'), c('topUps', 'Top-ups', 'currency'), c('total', 'Total deposited', 'currency', (r) => r.collected + r.topUps), c('billed', 'Final bill', 'currency'), c('applied', 'Applied to bill', 'currency'), c('refundedAll', 'Refunded / to wallet', 'currency', (r) => r.refunded + r.movedToWallet), c('held', 'Still held', 'currency'), c('balanceDue', 'Bill balance due', 'currency'), c('status', 'Status', 'status'), c('invoiceNo', 'Invoice')],
+  dims: [facilityDim, d('ward', 'Ward'), d('department', 'Department'), d('status', 'Deposit status'), d('coverBand', 'Deposit cover of bill', (r) => (!r.billed ? 'Not yet billed' : r.collected + r.topUps >= r.billed ? 'Covered in full' : (r.collected + r.topUps) / r.billed >= 0.5 ? '50–99% covered' : 'Under 50% covered'), ['Covered in full', '50–99% covered', 'Under 50% covered', 'Not yet billed']), monthDim((r) => r.collectedOn)],
+  measures: [
+    m('deposits', 'Deposits taken', 'number', (rs) => rs.length, 'up'),
+    m('deposited', 'Total deposited', 'currency', (rs) => sum(rs, (r) => r.collected + r.topUps), 'up'),
+    m('held', 'Deposits held now', 'currency', (rs) => sum(rs, (r) => r.held)),
+    m('heldCount', 'Patients with deposit held', 'number', (rs) => count(rs, (r) => r.held > 0)),
+    m('applied', 'Applied to bills', 'currency', (rs) => sum(rs, (r) => r.applied)),
+    m('refunded', 'Refunded / moved to wallet', 'currency', (rs) => sum(rs, (r) => r.refunded + r.movedToWallet)),
+    m('avgDeposit', 'Average deposit', 'currency', (rs) => avg(rs, (r) => r.collected + r.topUps)),
+    m('cover', 'Deposit cover of final bills', 'percent', (rs) => ratio(sum(rs, (r) => (r.billed ? r.applied : 0)), sum(rs, (r) => r.billed)), 'up', 'Share of final inpatient bills settled from deposits'),
+    m('balanceDue', 'Balance due after deposit', 'currency', (rs) => sum(rs, (r) => r.balanceDue), 'down'),
+    m('shortfall', 'Bills exceeding deposit', 'number', (rs) => count(rs, (r) => r.status === 'Applied – balance due'), 'down'),
+  ],
+  filters: ['facility', 'ward', 'department', 'status'],
+  defaultColumns: ['collectedOn', 'id', 'patient', 'facility', 'ward', 'total', 'billed', 'applied', 'refundedAll', 'held', 'status'],
+}
+const depositsHeld: SourceDef = { ...depositAccounts, id: 'depositsHeld', label: 'Deposits held', snapshot: true, date: undefined, rows: (db) => db.deposits.filter((r) => r.held > 0), defaultColumns: ['collectedOn', 'id', 'admissionId', 'patient', 'facility', 'ward', 'collected', 'topUps', 'held', 'status'] }
+
+const depositTxns: SourceDef = {
+  id: 'depositTxns',
+  label: 'Deposit transactions',
+  rows: (db) => db.depositTxns,
+  date: (r) => r.date,
+  dateLabel: 'Transaction date',
+  columns: [c('date', 'Date', 'datetime'), c('id', 'Txn ID'), c('depositId', 'Deposit no.'), c('admissionId', 'Admission no.'), c('patient', 'Patient'), facilityCol, c('ward', 'Ward'), c('type', 'Transaction', 'status'), c('amount', 'Amount', 'currency'), c('method', 'Method / invoice'), c('by', 'Processed by')],
+  dims: [facilityDim, d('ward', 'Ward'), d('type', 'Transaction type'), d('method', 'Method / invoice'), d('by', 'Processed by'), monthDim((r) => r.date)],
+  measures: [
+    m('txns', 'Transactions', 'number', (rs) => rs.length),
+    m('collected', 'Deposits received', 'currency', (rs) => sum(rs, (r) => (r.type === 'Collected' || r.type === 'Top-up' ? r.amount : 0)), 'up'),
+    m('applied', 'Applied to bills', 'currency', (rs) => sum(rs, (r) => (r.type === 'Applied to bill' ? r.amount : 0))),
+    m('refunded', 'Refunded to patients', 'currency', (rs) => sum(rs, (r) => (r.type === 'Refunded' ? r.amount : 0))),
+    m('toWallet', 'Moved to patient wallet', 'currency', (rs) => sum(rs, (r) => (r.type === 'Moved to wallet' ? r.amount : 0))),
+    m('net', 'Net change in deposits held', 'currency', (rs) => sum(rs, (r) => (r.type === 'Collected' || r.type === 'Top-up' ? r.amount : -r.amount))),
+  ],
+  filters: ['facility', 'ward', 'type'],
+  defaultColumns: ['date', 'id', 'depositId', 'patient', 'facility', 'ward', 'type', 'amount', 'method', 'by'],
+}
+
+const depositRecon: SourceDef = {
+  id: 'depositRecon',
+  label: 'Deposit reconciliation',
+  derive: (db, p) => {
+    const map = new Map<string, Row>()
+    for (const t of db.depositTxns) {
+      const day = t.date.slice(0, 10)
+      if (day > p.to) continue
+      let r = map.get(t.facility)
+      if (!r) map.set(t.facility, (r = { facility: t.facility, opening: 0, received: 0, applied: 0, refunded: 0, toWallet: 0, closing: 0 }))
+      const signed = t.type === 'Collected' || t.type === 'Top-up' ? t.amount : -t.amount
+      if (day < p.from) r.opening += signed
+      else if (signed > 0) r.received += t.amount
+      else if (t.type === 'Applied to bill') r.applied += t.amount
+      else if (t.type === 'Refunded') r.refunded += t.amount
+      else r.toWallet += t.amount
+      r.closing += signed
+    }
+    return [...map.values()].map((r) => ({ ...r, variance: r.opening + r.received - r.applied - r.refunded - r.toWallet - r.closing }))
+  },
+  columns: [facilityCol, c('opening', 'Opening held', 'currency'), c('received', 'Received', 'currency'), c('applied', 'Applied to bills', 'currency'), c('refunded', 'Refunded', 'currency'), c('toWallet', 'Moved to wallet', 'currency'), c('closing', 'Closing held', 'currency'), c('variance', 'Variance', 'currency')],
+  dims: [facilityDim],
+  measures: [
+    m('opening', 'Opening deposits held', 'currency', (rs) => sum(rs, (r) => r.opening)),
+    m('received', 'Deposits received', 'currency', (rs) => sum(rs, (r) => r.received)),
+    m('applied', 'Applied to bills', 'currency', (rs) => sum(rs, (r) => r.applied)),
+    m('refunded', 'Refunded', 'currency', (rs) => sum(rs, (r) => r.refunded)),
+    m('toWallet', 'Moved to wallet', 'currency', (rs) => sum(rs, (r) => r.toWallet)),
+    m('closing', 'Closing deposits held', 'currency', (rs) => sum(rs, (r) => r.closing)),
+    m('variance', 'Unexplained variance', 'currency', (rs) => sum(rs, (r) => r.variance), 'down'),
+  ],
+  filters: ['facility'],
+  defaultColumns: ['facility', 'opening', 'received', 'applied', 'refunded', 'toWallet', 'closing', 'variance'],
+}
+
+// ---------------------------------------------- patient credit accounts
+const creditFacilities: SourceDef = {
+  id: 'creditFacilities',
+  label: 'Patient credit accounts',
+  snapshot: true,
+  rows: (db) => db.creditFacilities,
+  columns: [c('id', 'Account'), c('patient', 'Account holder'), c('patientId', 'Patient ID'), facilityCol, c('scheme', 'Scheme'), c('openedOn', 'Opened', 'date'), c('approvedBy', 'Approved by'), c('limit', 'Credit limit', 'currency'), c('owed', 'Amount owed', 'currency'), c('available', 'Available credit', 'currency'), c('utilisation', 'Utilisation', 'percent'), c('oldestUnpaidDays', 'Oldest unpaid (days)', 'number'), c('owedPastTerms', 'Past due', 'currency'), c('lastActivity', 'Last activity', 'datetime'), c('status', 'Status', 'status')],
+  dims: [facilityDim, d('scheme', 'Credit scheme'), d('status', 'Limit status', undefined, ['Over limit', 'Near limit', 'Within limit', 'Clear']), d('utilBand', 'Utilisation band', (r) => (r.utilisation > 1 ? 'Over 100%' : r.utilisation >= 0.8 ? '80–100%' : r.utilisation >= 0.5 ? '50–79%' : r.utilisation > 0 ? '1–49%' : 'Nothing owed'), ['Over 100%', '80–100%', '50–79%', '1–49%', 'Nothing owed']), d('ageBand', 'Oldest unpaid', (r) => (!r.owed ? 'Nothing owed' : r.oldestUnpaidDays <= 30 ? 'Within terms (≤30 days)' : r.oldestUnpaidDays <= 60 ? '31–60 days' : r.oldestUnpaidDays <= 90 ? '61–90 days' : '90+ days'), ['Within terms (≤30 days)', '31–60 days', '61–90 days', '90+ days', 'Nothing owed'])],
+  measures: [
+    m('accounts', 'Credit accounts', 'number', (rs) => rs.length),
+    m('withBalance', 'Accounts with balance', 'number', (rs) => count(rs, (r) => r.owed > 0)),
+    m('limit', 'Total credit limits', 'currency', (rs) => sum(rs, (r) => r.limit)),
+    m('owed', 'Credit owed by patients', 'currency', (rs) => sum(rs, (r) => r.owed), 'down'),
+    m('available', 'Unused credit', 'currency', (rs) => sum(rs, (r) => r.available)),
+    m('utilisation', 'Overall utilisation', 'percent', (rs) => ratio(sum(rs, (r) => r.owed), sum(rs, (r) => r.limit))),
+    m('nearLimit', 'Near limit (≥80%)', 'number', (rs) => count(rs, (r) => r.status === 'Near limit'), 'down'),
+    m('overLimit', 'Over limit', 'number', (rs) => count(rs, (r) => r.status === 'Over limit'), 'down'),
+    m('pastTerms', 'Owed past due date', 'currency', (rs) => sum(rs, (r) => r.owedPastTerms), 'down', 'Bills not repaid within the 30-day credit terms'),
+  ],
+  filters: ['facility', 'scheme', 'status', 'utilBand'],
+  defaultColumns: ['id', 'patient', 'facility', 'scheme', 'limit', 'owed', 'available', 'utilisation', 'oldestUnpaidDays', 'status'],
+}
+
+const creditLedger: SourceDef = {
+  id: 'creditLedger',
+  label: 'Patient credit ledger',
+  rows: (db) => db.creditLedger,
+  date: (r) => r.date,
+  dateLabel: 'Transaction date',
+  columns: [c('date', 'Date', 'datetime'), c('id', 'Txn ID'), c('accountId', 'Account'), c('patient', 'Account holder'), facilityCol, c('scheme', 'Scheme'), c('type', 'Transaction', 'status'), c('amount', 'Amount', 'currency'), c('invoiceNo', 'Invoice'), c('dueDate', 'Due date', 'date'), c('balanceAfter', 'Balance after', 'currency')],
+  dims: [facilityDim, d('scheme', 'Credit scheme'), d('type', 'Transaction type'), monthDim((r) => r.date)],
+  measures: [
+    m('txns', 'Transactions', 'number', (rs) => rs.length),
+    m('charged', 'Charged to credit', 'currency', (rs) => sum(rs, (r) => (r.type === 'Charged to credit' ? r.amount : 0))),
+    m('repaid', 'Repayments received', 'currency', (rs) => sum(rs, (r) => (r.type === 'Repayment' ? r.amount : 0)), 'up'),
+    m('writtenOff', 'Written off', 'currency', (rs) => sum(rs, (r) => (r.type === 'Written off' ? r.amount : 0)), 'down'),
+    m('net', 'Net change in credit owed', 'currency', (rs) => sum(rs, (r) => (r.type === 'Charged to credit' ? r.amount : -r.amount)), 'down'),
+    m('accounts', 'Accounts active', 'number', (rs) => distinct(rs, (r) => r.accountId)),
+    m('repayRate', 'Repayment ratio', 'percent', (rs) => ratio(sum(rs, (r) => (r.type === 'Repayment' ? r.amount : 0)), sum(rs, (r) => (r.type === 'Charged to credit' ? r.amount : 0))), 'up'),
+  ],
+  filters: ['facility', 'scheme', 'type'],
+  defaultColumns: ['date', 'id', 'accountId', 'patient', 'facility', 'type', 'amount', 'invoiceNo', 'dueDate', 'balanceAfter'],
+}
+
+/** One row per patient: wallet balance, deposit held and credit owed. */
+const patientBalances: SourceDef = {
+  id: 'patientBalances',
+  label: 'Patient account balances',
+  snapshot: true,
+  rows: (db) => {
+    const map = new Map<string, Row>()
+    const get = (pid: string, patient: string, facility: string) => {
+      let r = map.get(pid)
+      if (!r) map.set(pid, (r = { patientId: pid, patient, facility, wallet: 0, deposit: 0, creditOwed: 0, creditLimit: 0, scheme: '—' }))
+      return r
+    }
+    const lastWallet = new Map<string, Row>()
+    for (const t of db.credits) lastWallet.set(t.accountId, t)
+    for (const t of lastWallet.values()) if (t.balanceAfter > 0) get(`HK-${t.accountId.slice(4)}`, t.patient, t.facility).wallet = t.balanceAfter
+    for (const d of db.deposits) if (d.held > 0) get(d.patientId, d.patient, d.facility).deposit += d.held
+    for (const a of db.creditFacilities)
+      if (a.owed > 0) {
+        const r = get(a.patientId, a.patient, a.facility)
+        r.creditOwed = a.owed
+        r.creditLimit = a.limit
+        r.scheme = a.scheme
+      }
+    return [...map.values()].map((r) => ({ ...r, net: r.wallet + r.deposit - r.creditOwed, position: r.wallet + r.deposit - r.creditOwed >= 0 ? 'Hospital holds patient funds' : 'Patient owes hospital' }))
+  },
+  columns: [c('patientId', 'Patient ID'), c('patient', 'Patient'), facilityCol, c('wallet', 'Wallet balance', 'currency'), c('deposit', 'Deposit held', 'currency'), c('creditOwed', 'Credit owed', 'currency'), c('creditLimit', 'Credit limit', 'currency'), c('net', 'Net position', 'currency'), c('position', 'Position')],
+  dims: [facilityDim, d('position', 'Net position'), d('holds', 'Balance type', (r) => (r.creditOwed > 0 ? 'Has credit owed' : r.deposit > 0 ? 'Has deposit held' : 'Wallet only')), d('scheme', 'Credit scheme')],
+  measures: [
+    m('patients', 'Patients with balances', 'number', (rs) => rs.length),
+    m('wallet', 'Patient wallet balances', 'currency', (rs) => sum(rs, (r) => r.wallet)),
+    m('deposit', 'Deposits held', 'currency', (rs) => sum(rs, (r) => r.deposit)),
+    m('creditOwed', 'Patient credit owed', 'currency', (rs) => sum(rs, (r) => r.creditOwed), 'down'),
+    m('liability', 'Owed to patients (wallet + deposits)', 'currency', (rs) => sum(rs, (r) => r.wallet + r.deposit), undefined, 'Money the hospital holds on behalf of patients'),
+    m('net', 'Net patient position', 'currency', (rs) => sum(rs, (r) => r.net), undefined, 'Wallet + deposits − credit owed'),
+    m('owing', 'Patients owing', 'number', (rs) => count(rs, (r) => r.net < 0)),
+  ],
+  filters: ['facility', 'position', 'holds'],
+  defaultColumns: ['patientId', 'patient', 'facility', 'wallet', 'deposit', 'creditOwed', 'creditLimit', 'net', 'position'],
+}
+
 export const SOURCES: Record<string, SourceDef> = Object.fromEntries(
-  [visits, patients, labs, prescriptions, procedures, invoices, invoiceLines, payments, adjustments, credits, creditAccounts, creditRecon, admissions, discharges, inpatients, wardDays, transfers, nursing, stock, movements, purchaseOrders, claims, staff, logins, security, integrations, facilityScorecard, departmentScorecard, doctorUtilization, monthlyFinance, dailyCollections, stockRecon].map((s) => [s.id, s]),
+  [visits, patients, labs, prescriptions, procedures, invoices, invoiceLines, payments, adjustments, credits, creditAccounts, creditRecon, admissions, discharges, inpatients, wardDays, transfers, nursing, stock, movements, purchaseOrders, claims, staff, logins, security, integrations, facilityScorecard, departmentScorecard, doctorUtilization, monthlyFinance, dailyCollections, stockRecon, depositAccounts, depositsHeld, depositTxns, depositRecon, creditFacilities, creditLedger, patientBalances].map((s) => [s.id, s]),
 )
 
 // Cache flattened static rows per source.

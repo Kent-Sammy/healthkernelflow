@@ -550,15 +550,26 @@ function ReconciliationStatement({ result }: { result: ReportResult }) {
   if (result.src.id === 'creditRecon') {
     const adj = result.rows.reduce((a: number, r: Row) => a + r.adjusted, 0)
     lines = [
-      { label: 'Opening balance', value: k('opening'), fmt: 'currency' },
-      { label: 'Credits issued', value: k('issued'), op: '+', fmt: 'currency' },
+      { label: 'Opening wallet balances', value: k('opening'), fmt: 'currency' },
+      { label: 'Top-ups & credits added', value: k('issued'), op: '+', fmt: 'currency' },
       { label: 'Net adjustments', value: adj, op: '+', fmt: 'currency' },
-      { label: 'Credits utilized', value: k('utilized'), op: '−', fmt: 'currency' },
-      { label: 'Credits reversed', value: k('reversed'), op: '−', fmt: 'currency' },
-      { label: 'Closing balance', value: k('closing'), op: '=', fmt: 'currency' },
+      { label: 'Spent on bills', value: k('utilized'), op: '−', fmt: 'currency' },
+      { label: 'Withdrawn by patients', value: k('reversed'), op: '−', fmt: 'currency' },
+      { label: 'Closing wallet balances', value: k('closing'), op: '=', fmt: 'currency' },
     ]
     const v = k('variance')
     check = { ok: Math.abs(v) < 1, text: Math.abs(v) < 1 ? 'Ledger balances — no unexplained variance' : `Unexplained variance ${formatValue(v, 'currency')}` }
+  } else if (result.src.id === 'depositRecon') {
+    lines = [
+      { label: 'Opening deposits held', value: k('opening'), fmt: 'currency' },
+      { label: 'Deposits received (incl. top-ups)', value: k('received'), op: '+', fmt: 'currency' },
+      { label: 'Applied to final bills', value: k('applied'), op: '−', fmt: 'currency' },
+      { label: 'Refunded to patients', value: k('refunded'), op: '−', fmt: 'currency' },
+      { label: 'Moved to patient wallets', value: k('toWallet'), op: '−', fmt: 'currency' },
+      { label: 'Closing deposits held', value: k('closing'), op: '=', fmt: 'currency' },
+    ]
+    const v = k('variance')
+    check = { ok: Math.abs(v) < 1, text: Math.abs(v) < 1 ? 'Deposit ledger balances — no unexplained variance' : `Unexplained variance ${formatValue(v, 'currency')}` }
   } else if (result.src.id === 'payments') {
     const pending = result.rows.filter((r: Row) => r.reconciliation === 'Pending review').reduce((a: number, r: Row) => a + r.amount, 0)
     lines = [

@@ -21,8 +21,8 @@ npm run dev
 
 | Page | Route |
 | --- | --- |
-| Overview dashboard (KPIs, trends, facility comparison, exceptions) | `/reports` |
-| All Reports catalogue (224 templates, 21 modules, search & filters) | `/reports/catalogue` |
+| Overview dashboard (KPIs, patient balances, trends, facility comparison, exceptions) | `/reports` |
+| All Reports catalogue (238 templates, 23 modules, search & filters) | `/reports/catalogue` |
 | Report Builder (period, relevant filters, grouping, summary/detailed) | `/reports/builder` |
 | Generated report view (KPIs, charts, summary & detailed tables, CSV, print) | `/reports/view?r=<report-id>` |
 | Saved Reports, Report History, Scheduled Reports | `/reports/saved`, `/history`, `/scheduled` |
@@ -35,6 +35,7 @@ Only the Reports & Analytics section of the sidebar is interactive; the other He
 
 - `src/features/reports/data/generate.ts` simulates 12 months (1 Nov 2025 – 27 Oct 2026) of activity across four fictional facilities. Records are linked: visits create lab orders, prescriptions and invoices; dispensing draws down stock, which triggers LPOs and deliveries; HMO invoices become claims whose remittances become payments; admissions occupy beds, which drives the ward census and nursing workload. A fixed seed makes every load identical.
 - `engine/sources.ts` defines data sources with columns, dimensions and measures; `engine/catalogue.ts` declares every report; `engine/run.ts` turns a report + configuration into KPIs, trends, breakdowns and tables. The overview uses the same engine, so its numbers match the reports it links to.
+- Patient balances: wallet balances (prepaid top-ups spent at the till), admission deposits (applied to the final bill, excess refunded or moved to the wallet) and pay-later credit accounts (charged to credit within a limit, repaid later). Each reconciles with its own ledger and with the invoice and payment records.
 - Report configurations live in the URL; saved reports, history, schedules, regulatory returns and the audit trail persist in `localStorage`.
 
 ### Limitations

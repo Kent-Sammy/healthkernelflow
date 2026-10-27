@@ -8,7 +8,7 @@ import type { Row } from './sources'
 import type { PeriodPreset } from './period'
 
 export type ModuleId =
-  | 'billing' | 'credits' | 'patients' | 'clinical' | 'diagnoses' | 'admissions' | 'laboratory' | 'pharmacy' | 'inventory'
+  | 'billing' | 'credits' | 'deposits' | 'patientCredit' | 'patients' | 'clinical' | 'diagnoses' | 'admissions' | 'laboratory' | 'pharmacy' | 'inventory'
   | 'procurement' | 'insurance' | 'doctor' | 'nurse' | 'dental' | 'team' | 'security' | 'services' | 'facilities'
   | 'integrations' | 'telemedicine' | 'quality'
 
@@ -24,7 +24,9 @@ export interface ModuleDef {
 
 export const MODULES: ModuleDef[] = [
   { id: 'billing', label: 'Billing & Payments', icon: 'Receipt', category: 'Financial', blurb: 'Invoices, collections, receivables and reconciliation' },
-  { id: 'credits', label: 'Credits', icon: 'Wallet', category: 'Financial', blurb: 'Patient deposits, promotional and refund credits' },
+  { id: 'credits', label: 'Patient Wallet', icon: 'Wallet', category: 'Financial', blurb: 'Prepaid wallet top-ups, wallet spending and balances' },
+  { id: 'deposits', label: 'Patient Deposits', icon: 'PiggyBank', category: 'Financial', blurb: 'Admission deposits held, applied to bills and refunded' },
+  { id: 'patientCredit', label: 'Patient Credit Accounts', icon: 'CreditCard', category: 'Financial', blurb: 'Pay-later accounts: amounts owed, limits and repayments' },
   { id: 'insurance', label: 'Insurance & HMO', icon: 'ShieldCheck', category: 'Financial', blurb: 'Claims lifecycle, reimbursements and tariff variance' },
   { id: 'patients', label: 'Patients', icon: 'Users', category: 'Clinical', blurb: 'Registrations, visits, demographics and waiting times' },
   { id: 'clinical', label: 'Clinical Management', icon: 'Stethoscope', category: 'Clinical', blurb: 'Consultations, workload and documentation' },
@@ -176,38 +178,88 @@ R('billing', 'bad-debt-write-offs', 'Bad Debt & Write-offs', 'Analysis', 'adjust
   where: oneOf('type', 'Write-off', 'Claims Adjustment'), whereLabel: 'Write-offs', kpis: ['writeOffs', 'count', 'avg'],
   breakdowns: [{ dim: 'type', measure: 'total', chart: 'donut' }, { dim: 'facility', measure: 'total', chart: 'hbar' }], trend: { measures: ['total'], chart: 'bar' }, groupBy: 'facility', groupMeasures: ['count', 'total'], defaultPeriod: 'ytd',
 })
+R('billing', 'patient-account-balances', 'Patient Account Balances', 'Snapshot', 'patientBalances', 'Every patient with money on account: wallet balance, deposit held and credit owed, with the net position.', {
+  kpis: ['wallet', 'deposit', 'creditOwed', 'liability', 'patients'], breakdowns: [{ dim: 'holds', measure: 'patients', chart: 'donut', title: 'Patients by balance type' }, { dim: 'facility', measure: 'liability', chart: 'hbar', title: 'Funds held for patients by facility' }],
+  groupBy: 'facility', groupMeasures: ['patients', 'wallet', 'deposit', 'creditOwed', 'net'], recommended: true, audience: 'Finance',
+})
 R('billing', 'cashier-performance', 'Cashier Performance', 'Analysis', 'payments', 'Receipts and amounts processed by each cashier, for till accountability.', {
   where: (r) => !['Finance – Receivables'].includes(r.cashier), whereLabel: 'Front-desk receipts only', kpis: ['collected', 'receipts', 'avgReceipt'],
   breakdowns: [{ dim: 'cashier', measure: 'collected', chart: 'hbar' }], groupBy: 'cashier', groupMeasures: ['receipts', 'collected', 'avgReceipt', 'cashless'],
 })
 
 // ============================================================ CREDITS
-R('credits', 'credits-issued', 'Credits Issued', 'Analysis', 'credits', 'Credit issued to patient wallets — prepaid deposits, promotional and refund credits.', {
+R('credits', 'credits-issued', 'Wallet Top-ups & Credits', 'Analysis', 'credits', 'Money added to patient wallets — cash top-ups, promotional credit and refunds paid into the wallet.', {
   where: oneOf('action', 'Issued'), whereLabel: 'Transaction = Issued', kpis: ['issued', 'txns', 'accounts'],
   breakdowns: [{ dim: 'creditType', measure: 'issued', chart: 'donut' }, { dim: 'facility', measure: 'issued', chart: 'hbar' }], trend: { measures: ['issued'], splitBy: 'creditType', chart: 'bar' }, groupBy: 'creditType', groupMeasures: ['txns', 'issued', 'accounts'], defaultPeriod: 'ytd',
 })
-R('credits', 'credits-utilized', 'Credits Utilized', 'Analysis', 'credits', 'Wallet credit applied against patient invoices at the point of payment.', {
+R('credits', 'credits-utilized', 'Wallet Payments', 'Analysis', 'credits', 'Wallet balances spent on patient bills at the point of payment.', {
   where: oneOf('action', 'Utilized'), whereLabel: 'Transaction = Utilized', kpis: ['utilized', 'txns', 'accounts'],
   breakdowns: [{ dim: 'creditType', measure: 'utilized', chart: 'donut' }, { dim: 'facility', measure: 'utilized', chart: 'hbar' }], trend: { measures: ['utilized'], chart: 'bar' }, groupBy: 'facility', groupMeasures: ['txns', 'utilized'], defaultPeriod: 'ytd',
 })
-R('credits', 'outstanding-credit-balances', 'Outstanding Credit Balances', 'Snapshot', 'creditAccounts', 'Current wallet balances owed to patients, by credit type and facility.', {
+R('credits', 'outstanding-credit-balances', 'Patient Wallet Balances', 'Snapshot', 'creditAccounts', 'Current wallet balance for every patient — money the hospital holds on their behalf.', {
   where: (r) => r.balance > 0, whereLabel: 'Balance > ₦0', kpis: ['balance', 'withBalance', 'avgBalance', 'dormant'],
   breakdowns: [{ dim: 'creditType', measure: 'balance', chart: 'donut' }, { dim: 'facility', measure: 'balance', chart: 'hbar' }], groupBy: 'creditType', groupMeasures: ['accounts', 'balance', 'avgBalance'], recommended: true,
 })
-R('credits', 'credit-adjustments', 'Credit Adjustments', 'Register', 'credits', 'Manual corrections to wallet balances and who processed them.', {
+R('credits', 'credit-adjustments', 'Wallet Adjustments', 'Register', 'credits', 'Manual corrections to wallet balances and who processed them.', {
   where: oneOf('action', 'Adjusted'), whereLabel: 'Transaction = Adjusted', kpis: ['adjusted', 'txns'], breakdowns: [{ dim: 'by', measure: 'txns', chart: 'hbar', title: 'By officer' }], groupBy: 'creditType', groupMeasures: ['txns', 'adjusted'], defaultPeriod: 'ytd', defaultView: 'detailed',
 })
-R('credits', 'credit-reversals', 'Credit Reversals', 'Register', 'credits', 'Deposits reversed and refunded to patients on request.', {
+R('credits', 'credit-reversals', 'Wallet Withdrawals', 'Register', 'credits', 'Wallet top-ups reversed and paid back to patients on request.', {
   where: oneOf('action', 'Reversed'), whereLabel: 'Transaction = Reversed', kpis: ['reversed', 'txns'], breakdowns: [{ dim: 'facility', measure: 'reversed', chart: 'hbar' }], groupBy: 'creditType', groupMeasures: ['txns', 'reversed'], defaultPeriod: 'ytd', defaultView: 'detailed',
 })
-R('credits', 'credit-transaction-history', 'Credit Transaction History', 'Register', 'credits', 'Complete ledger of wallet transactions with running balances.', {
+R('credits', 'credit-transaction-history', 'Wallet Transaction History', 'Register', 'credits', 'Complete ledger of wallet transactions with running balances.', {
   kpis: ['txns', 'issued', 'utilized', 'net'], trend: { measures: ['issued', 'utilized'], chart: 'bar' }, breakdowns: [{ dim: 'action', measure: 'txns', chart: 'donut' }], groupBy: 'action', groupMeasures: ['txns', 'issued', 'utilized', 'reversed'], defaultView: 'detailed',
 })
-R('credits', 'credit-reconciliation', 'Credit Reconciliation', 'Reconciliation', 'creditRecon', 'Opening balance + issued − utilized ± adjustments − reversals = closing balance, per credit type.', {
+R('credits', 'credit-reconciliation', 'Wallet Reconciliation', 'Reconciliation', 'creditRecon', 'Opening wallet balances + top-ups − spending ± adjustments − withdrawals = closing balances.', {
   kpis: ['opening', 'issued', 'utilized', 'reversed', 'closing', 'variance'], breakdowns: [{ dim: 'creditType', measure: 'closing', chart: 'donut', title: 'Closing balance by type' }], groupBy: 'creditType', groupMeasures: ['opening', 'issued', 'utilized', 'reversed', 'closing', 'variance'], defaultPeriod: 'last_quarter',
 })
-R('credits', 'dormant-credit-wallets', 'Dormant Credit Wallets', 'Exception', 'creditAccounts', 'Wallets holding a balance with no activity for over 90 days — candidates for outreach.', {
+R('credits', 'dormant-credit-wallets', 'Dormant Wallets', 'Exception', 'creditAccounts', 'Wallets holding a balance with no activity for over 90 days — candidates for outreach.', {
   where: (r) => r.balance > 0 && r.dormantDays > 90, whereLabel: 'Balance > ₦0 and idle 90+ days', kpis: ['accounts', 'balance', 'avgBalance'], breakdowns: [{ dim: 'creditType', measure: 'balance', chart: 'donut' }], groupBy: 'facility', groupMeasures: ['accounts', 'balance'], defaultView: 'detailed',
+})
+
+// ============================================================ DEPOSITS
+R('deposits', 'deposit-balances-held', 'Deposit Balances Held', 'Snapshot', 'depositsHeld', 'Admission deposits currently held for patients — on the wards now or awaiting refund of excess.', {
+  kpis: ['held', 'heldCount', 'avgDeposit'], breakdowns: [{ dim: 'ward', measure: 'held', chart: 'hbar', title: 'Deposits held by ward' }, { dim: 'facility', measure: 'held', chart: 'donut' }], groupBy: 'facility', groupMeasures: ['heldCount', 'held'], defaultView: 'detailed', recommended: true, audience: 'Finance',
+})
+R('deposits', 'deposits-summary', 'Deposits Summary', 'Summary', 'depositAccounts', 'Deposits taken on admission, how much of each final bill they covered and what was refunded.', {
+  kpis: ['deposits', 'deposited', 'applied', 'refunded', 'cover', 'balanceDue'], trend: { measures: ['deposited'], chart: 'bar', title: 'Deposits taken' }, breakdowns: [{ dim: 'coverBand', measure: 'deposits', chart: 'donut', title: 'Deposit cover of final bill' }, { dim: 'ward', measure: 'deposited', chart: 'hbar' }],
+  groupBy: 'ward', groupMeasures: ['deposits', 'deposited', 'applied', 'refunded', 'cover'],
+})
+R('deposits', 'deposit-register', 'Deposit Register', 'Register', 'depositTxns', 'Every deposit movement: collected, top-ups, applied to bills, refunded or moved to wallet.', {
+  kpis: ['collected', 'applied', 'refunded', 'toWallet'], trend: { measures: ['collected', 'applied'], chart: 'bar' }, breakdowns: [{ dim: 'type', measure: 'txns', chart: 'donut' }], groupBy: 'type', groupMeasures: ['txns', 'collected', 'applied', 'refunded'], defaultView: 'detailed',
+})
+R('deposits', 'deposit-refunds', 'Deposit Refunds', 'Register', 'depositTxns', 'Excess deposits returned to patients or moved into their wallet at discharge.', {
+  where: oneOf('type', 'Refunded', 'Moved to wallet'), whereLabel: 'Refunds & wallet transfers', kpis: ['refunded', 'toWallet', 'txns'], breakdowns: [{ dim: 'type', measure: 'txns', chart: 'donut' }, { dim: 'facility', measure: 'txns', chart: 'hbar' }], groupBy: 'facility', groupMeasures: ['txns', 'refunded', 'toWallet'], defaultPeriod: 'last_quarter', defaultView: 'detailed',
+})
+R('deposits', 'deposit-shortfalls', 'Bills Exceeding Deposit', 'Exception', 'depositAccounts', 'Discharged patients whose final bill was larger than their deposit, with the balance still due.', {
+  where: oneOf('status', 'Applied – balance due'), whereLabel: 'Bill exceeded deposit', kpis: ['deposits', 'balanceDue', 'cover'], breakdowns: [{ dim: 'ward', measure: 'balanceDue', chart: 'hbar', title: 'Balance due by ward' }], groupBy: 'ward', groupMeasures: ['deposits', 'deposited', 'balanceDue'], defaultView: 'detailed',
+  detailWhere: (r) => r.balanceDue > 0, detailWhereLabel: 'Records list shows bills with a balance still unpaid',
+})
+R('deposits', 'deposit-reconciliation', 'Deposit Reconciliation', 'Reconciliation', 'depositRecon', 'Opening deposits held + received − applied − refunded − moved to wallet = closing deposits held.', {
+  kpis: ['opening', 'received', 'applied', 'refunded', 'closing', 'variance'], breakdowns: [{ dim: 'facility', measure: 'closing', chart: 'hbar', title: 'Closing deposits held' }], groupBy: 'facility', groupMeasures: ['opening', 'received', 'applied', 'refunded', 'toWallet', 'closing', 'variance'], defaultPeriod: 'this_month',
+})
+R('deposits', 'admissions-without-deposit', 'Self-pay Admissions Without Deposit', 'Exception', 'admissions', 'Self-pay patients admitted without a deposit — a revenue-protection check for admissions desks.', {
+  where: (r) => r.payerType === 'Self-pay' && !r.deposit, whereLabel: 'Self-pay, no deposit', kpis: ['admissions', 'current', 'billed'], breakdowns: [{ dim: 'ward', measure: 'admissions', chart: 'hbar' }], groupBy: 'facility', groupMeasures: ['admissions', 'current'], defaultPeriod: 'last_quarter', defaultView: 'detailed',
+})
+
+// ============================================================ PATIENT CREDIT
+R('patientCredit', 'credit-account-balances', 'Credit Account Balances', 'Snapshot', 'creditFacilities', 'What each pay-later patient owes against their approved limit, and how much credit remains.', {
+  where: (r) => r.owed > 0, whereLabel: 'Balance owed > ₦0', kpis: ['owed', 'withBalance', 'utilisation', 'nearLimit', 'overLimit', 'pastTerms'], breakdowns: [{ dim: 'ageBand', measure: 'owed', chart: 'bar', title: 'Owed by age of oldest bill' }, { dim: 'scheme', measure: 'owed', chart: 'donut' }],
+  groupBy: 'facility', groupMeasures: ['withBalance', 'limit', 'owed', 'available', 'utilisation'], recommended: true, audience: 'Finance',
+})
+R('patientCredit', 'credit-utilisation', 'Credit Limit Utilisation', 'Analysis', 'creditFacilities', 'All approved credit accounts by how much of their limit is in use.', {
+  kpis: ['accounts', 'limit', 'owed', 'utilisation'], breakdowns: [{ dim: 'utilBand', measure: 'accounts', chart: 'bar', title: 'Accounts by utilisation' }, { dim: 'scheme', measure: 'limit', chart: 'donut', title: 'Limits by scheme' }], groupBy: 'scheme', groupMeasures: ['accounts', 'limit', 'owed', 'utilisation'],
+})
+R('patientCredit', 'accounts-over-limit', 'Accounts Near or Over Limit', 'Exception', 'creditFacilities', 'Credit accounts at 80% or more of their limit — review before further services on credit.', {
+  where: oneOf('status', 'Near limit', 'Over limit'), whereLabel: 'Utilisation ≥ 80%', kpis: ['accounts', 'owed', 'overLimit'], breakdowns: [{ dim: 'status', measure: 'accounts', chart: 'donut' }], groupBy: 'facility', groupMeasures: ['accounts', 'limit', 'owed'], defaultView: 'detailed',
+})
+R('patientCredit', 'credit-aging', 'Patient Credit Aging', 'Analysis', 'creditFacilities', 'Credit owed by age of the oldest unpaid bill against 30-day terms.', {
+  where: (r) => r.owed > 0, whereLabel: 'Balance owed > ₦0', kpis: ['owed', 'pastTerms', 'withBalance'], breakdowns: [{ dim: 'ageBand', measure: 'owed', chart: 'bar' }, { dim: 'facility', measure: 'pastTerms', chart: 'hbar', title: 'Owed beyond terms by facility' }], groupBy: 'ageBand', groupMeasures: ['withBalance', 'owed'],
+})
+R('patientCredit', 'credit-ledger', 'Credit Ledger', 'Register', 'creditLedger', 'Services charged to credit accounts, repayments and write-offs, with running balances.', {
+  kpis: ['charged', 'repaid', 'writtenOff', 'net'], trend: { measures: ['charged', 'repaid'], chart: 'bar', title: 'Charged vs repaid' }, breakdowns: [{ dim: 'type', measure: 'txns', chart: 'donut' }], groupBy: 'type', groupMeasures: ['txns', 'charged', 'repaid', 'writtenOff'], defaultView: 'detailed',
+})
+R('patientCredit', 'credit-repayments', 'Credit Repayments', 'Analysis', 'creditLedger', 'Repayments received on pay-later accounts against new charges.', {
+  kpis: ['repaid', 'charged', 'repayRate', 'accounts'], trend: { measures: ['charged', 'repaid'], chart: 'line' }, breakdowns: [{ dim: 'scheme', measure: 'repaid', chart: 'donut' }, { dim: 'facility', measure: 'repaid', chart: 'hbar' }], groupBy: 'scheme', groupMeasures: ['charged', 'repaid', 'repayRate'], defaultPeriod: 'ytd',
 })
 
 // ============================================================ PATIENTS
@@ -576,7 +628,7 @@ R('insurance', 'claims-register', 'Claims Register', 'Register', 'claims', 'Ever
   kpis: ['claims', 'claimed', 'paid'], trend: { measures: ['claims'], chart: 'bar' }, groupBy: 'status', groupMeasures: ['claims', 'claimed'], defaultView: 'detailed',
 })
 R('insurance', 'claims-by-hmo', 'Claims by HMO', 'Comparison', 'claims', 'Claims value, approval ratio and payment speed per HMO.', {
-  kpis: ['claimed', 'approvalRate', 'daysToPay'], breakdowns: [{ dim: 'hmo', measure: 'claimed', chart: 'bar' }], groupBy: 'hmo', groupMeasures: ['claims', 'claimed', 'approved', 'paid', 'approvalRate', 'daysToPay', 'outstanding'],
+  kpis: ['claimed', 'approvalRate', 'daysToPay'], breakdowns: [{ dim: 'hmo', measure: 'claimed', chart: 'bar' }], groupBy: 'hmo', groupMeasures: ['claims', 'claimed', 'approved', 'paid', 'approvalRate', 'daysToPay', 'outstanding'], defaultPeriod: 'ytd',
 })
 R('insurance', 'claims-by-facility', 'Claims by Facility', 'Comparison', 'claims', 'Claims generated and recovered by each facility.', {
   kpis: ['claimed', 'paid', 'outstanding'], breakdowns: [{ dim: 'facility', measure: 'claimed', chart: 'bar' }], groupBy: 'facility', groupMeasures: ['claims', 'claimed', 'paid', 'outstanding', 'rejectionRate'],

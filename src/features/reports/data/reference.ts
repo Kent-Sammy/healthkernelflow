@@ -452,7 +452,7 @@ export const HMOS = [
 
 export const CORPORATES = ['Lagoon Petroleum Ltd', 'Zenara Telecoms', 'Bluewater Logistics', 'Kanem Agro Industries', 'Ridgeview Bank Plc']
 
-export const PAYMENT_METHODS = ['Cash', 'POS / Card', 'Bank Transfer', 'USSD / Mobile', 'HMO Remittance', 'Corporate Remittance', 'Patient Credit'] as const
+export const PAYMENT_METHODS = ['Cash', 'POS / Card', 'Bank Transfer', 'USSD / Mobile', 'HMO Remittance', 'Corporate Remittance', 'Patient Wallet', 'Deposit Applied'] as const
 
 export interface ProcedureDef {
   name: string

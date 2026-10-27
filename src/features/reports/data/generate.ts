@@ -41,7 +41,11 @@ import type {
   Adjustment,
   Admission,
   Claim,
+  CreditFacility,
+  CreditLedgerTxn,
   CreditTxn,
+  DepositAccount,
+  DepositTxn,
   Db,
   IntegrationRun,
   Invoice,
@@ -333,6 +337,51 @@ export function generateDb(): Db {
   let claimSeq = 1
 
   const wallets = new Map<string, { balance: number; facility: string; patient: string; type: CreditTxn['creditType'] }>()
+
+  // Admission deposits and pay-later patient credit accounts
+  const deposits: DepositAccount[] = []
+  const depositTxns: DepositTxn[] = []
+  let depSeq = 1
+  let depTxnSeq = 1
+  const creditLedger: CreditLedgerTxn[] = []
+  let clSeq = 1
+  const creditFacilities: CreditFacility[] = []
+  const creditByPatient = new Map<string, CreditFacility>()
+  const creditHolders = new Map<string, Patient[]>()
+  {
+    const schemes: CreditFacility['scheme'][] = ['Staff & dependants', 'Chronic care plan', 'Approved individual', 'Community scheme']
+    for (const f of FACILITIES) {
+      const pool = pools[f.id].adults.filter((p) => p.payerType === 'Self-pay')
+      const n = Math.round(42 * f.weight)
+      for (let i = 0; i < n; i++) {
+        const p = pool[rng.int(0, pool.length - 1)]
+        if (creditByPatient.has(p.id)) continue
+        const scheme = rng.weighted(schemes, [30, 30, 28, 12])
+        const acc: CreditFacility = {
+          id: `CRA-${pad(creditFacilities.length + 1, 4)}`,
+          patientId: p.id,
+          patient: p.name,
+          facility: f.id,
+          scheme,
+          limit: rng.pick(scheme === 'Chronic care plan' ? [150000, 250000, 300000] : scheme === 'Staff & dependants' ? [200000, 300000, 500000] : [50000, 100000, 150000]),
+          openedOn: isoDay(startN - rng.int(10, 700)),
+          approvedBy: rng.pick(financeApprovers),
+          charged: 0,
+          repaid: 0,
+          owed: 0,
+          available: 0,
+          utilisation: 0,
+          oldestUnpaidDays: 0,
+          owedPastTerms: 0,
+          lastActivity: '',
+          status: 'Clear',
+        }
+        creditFacilities.push(acc)
+        creditByPatient.set(p.id, acc)
+        creditHolders.set(f.id, [...(creditHolders.get(f.id) ?? []), p])
+      }
+    }
+  }
   const pendingReversals = new Map<number, { pid: string; amount: number }[]>()
 
   function creditTxn(day: number, minute: number, pid: string, action: CreditTxn['action'], amount: number, reference: string, by: string) {
@@ -390,9 +439,11 @@ export function generateDb(): Db {
     inv.lastPayment = isoDay(day)
   }
 
-  function createInvoice(day: number, minute: number, p: Patient, facility: string, department: string, lines: InvoiceLine[], source: 'Outpatient' | 'Inpatient'): Invoice {
+  function createInvoice(day: number, minute: number, p: Patient, facility: string, department: string, lines: InvoiceLine[], source: 'Outpatient' | 'Inpatient', deposit?: DepositAccount): Invoice {
     const gross = lines.reduce((a, l) => a + l.amount, 0)
-    let dueDay = day + 7
+    const credit = p.payerType === 'Self-pay' && !deposit ? creditByPatient.get(p.id) : undefined
+    const useCredit = !!credit && (credit.owed + gross <= credit.limit || rng.chance(0.15)) && rng.chance(0.75)
+    let dueDay = useCredit ? day + 30 : day + 7
     if (p.payerType === 'HMO') dueDay = day + 45
     if (p.payerType === 'Corporate') dueDay = dayNum(endOfMonth(isoDay(day))) + 30
     const inv: Invoice = {
@@ -419,6 +470,7 @@ export function generateDb(): Db {
       ageDays: endN - day,
       agingBucket: '',
       lastPayment: '',
+      onCredit: useCredit,
     }
     // Discounts & waivers (self-pay only)
     if (p.payerType === 'Self-pay') {
@@ -461,14 +513,57 @@ export function generateDb(): Db {
     invoices.push(inv)
 
     // Settlement behaviour
-    if (p.payerType === 'Self-pay') {
+    // Admission deposit is applied to the final bill first
+    if (deposit) {
+      const held = deposit.collected + deposit.topUps
+      const applied = Math.min(held, inv.net)
+      addPayment(day, minute + 5, inv, applied, 'Deposit Applied', deposit.id)
+      depositTxns.push({ id: `DTX-${pad(depTxnSeq++, 6)}`, date: stampFromMin(day * 1440 + minute + 5), depositId: deposit.id, admissionId: deposit.admissionId, patient: p.name, facility, ward: deposit.ward, type: 'Applied to bill', amount: applied, method: inv.id, by: rng.pick(cashiers[facility]) })
+      deposit.applied = applied
+      deposit.billed = inv.net
+      deposit.invoiceNo = inv.id
+      const excess = held - applied
+      if (excess > 0) {
+        const rd = day + rng.int(0, 2)
+        if (rd <= endN) {
+          const toWallet = rng.chance(0.3)
+          if (toWallet) {
+            if (!wallets.has(p.id)) wallets.set(p.id, { balance: 0, facility, patient: p.name, type: 'Refund to wallet' })
+            pendingCreditIssues.push({ day: rd, pid: p.id, amount: excess, ref: deposit.id })
+            deposit.movedToWallet = excess
+          } else deposit.refunded = excess
+          depositTxns.push({ id: `DTX-${pad(depTxnSeq++, 6)}`, date: stampFromMin(rd * 1440 + 900), depositId: deposit.id, admissionId: deposit.admissionId, patient: p.name, facility, ward: deposit.ward, type: toWallet ? 'Moved to wallet' : 'Refunded', amount: excess, method: toWallet ? 'Patient wallet' : rng.pick(['Bank Transfer', 'Cash']), by: rng.pick(financeApprovers) })
+        } else deposit.held = excess
+      }
+    }
+
+    if (p.payerType === 'Self-pay' && useCredit) {
+      // Charged to the patient's pay-later credit account; repaid later
+      const acc = credit!
+      creditLedger.push({ id: `CLG-${pad(clSeq++, 6)}`, date: inv.date, accountId: acc.id, patient: p.name, facility, scheme: acc.scheme, type: 'Charged to credit', amount: inv.net, invoiceNo: inv.id, balanceAfter: 0, dueDate: inv.dueDate })
+      acc.owed += inv.net
+      const r = rng.next()
+      const repay = (d: number, amt: number) => {
+        if (d > endN || amt <= 0) return
+        acc.owed -= amt
+        addPayment(d, rng.int(540, 1020), inv, amt, pickMethod(), `CR-REPAY-${acc.id}`)
+        creditLedger.push({ id: `CLG-${pad(clSeq++, 6)}`, date: stampFromMin(d * 1440 + 600), accountId: acc.id, patient: p.name, facility, scheme: acc.scheme, type: 'Repayment', amount: amt, invoiceNo: inv.id, balanceAfter: 0, dueDate: inv.dueDate })
+      }
+      if (r < 0.62) repay(day + rng.int(10, 60), inv.net)
+      else if (r < 0.84) {
+        const part = Math.round((inv.net * (0.3 + rng.next() * 0.4)) / 100) * 100
+        repay(day + rng.int(7, 35), part)
+        if (rng.chance(0.45)) repay(day + rng.int(40, 90), inv.net - part)
+      }
+    } else if (p.payerType === 'Self-pay' && inv.net - inv.paid > 0) {
+      const due = inv.net - inv.paid
       const r = rng.next()
       const payMin = minute + rng.int(5, 40)
       if (r < 0.85) {
         const w = wallets.get(p.id)
-        const method = w && w.balance >= inv.net && rng.chance(0.6) ? 'Patient Credit' : pickMethod()
-        addPayment(day, payMin, inv, inv.net, method)
-        if (method === 'Patient Credit') creditTxn(day, payMin, p.id, 'Utilized', inv.net, inv.id, rng.pick(cashiers[facility]))
+        const method = w && w.balance >= due && rng.chance(0.6) ? 'Patient Wallet' : pickMethod()
+        addPayment(day, payMin, inv, due, method)
+        if (method === 'Patient Wallet') creditTxn(day, payMin, p.id, 'Utilized', due, inv.id, rng.pick(cashiers[facility]))
         // Occasional credit note + refund on a paid invoice
         if (rng.chance(0.012)) {
           const amt = Math.round((inv.net * rng.pick([0.2, 0.3, 0.5])) / 50) * 50
@@ -479,23 +574,23 @@ export function generateDb(): Db {
             adjustments.push({ id: `ADJ-${pad(adjSeq++, 6)}`, date: stampFromMin(rd * 1440 + 600), invoiceNo: inv.id, patient: p.name, facility, department, type: 'Credit Note', reason, amount: amt, approvedBy: rng.pick(financeApprovers), payerType: p.payerType })
             const toWallet = rng.chance(0.35)
             inv.refunded += amt
-            adjustments.push({ id: `ADJ-${pad(adjSeq++, 6)}`, date: stampFromMin(rd * 1440 + 660), invoiceNo: inv.id, patient: p.name, facility, department, type: 'Refund', reason: toWallet ? 'Refunded to patient credit wallet' : `Refunded via ${rng.pick(['bank transfer', 'cash', 'card reversal'])}`, amount: amt, approvedBy: rng.pick(financeApprovers), payerType: p.payerType })
+            adjustments.push({ id: `ADJ-${pad(adjSeq++, 6)}`, date: stampFromMin(rd * 1440 + 660), invoiceNo: inv.id, patient: p.name, facility, department, type: 'Refund', reason: toWallet ? 'Refunded to patient wallet' : `Refunded via ${rng.pick(['bank transfer', 'cash', 'card reversal'])}`, amount: amt, approvedBy: rng.pick(financeApprovers), payerType: p.payerType })
             if (toWallet) {
-              if (!wallets.has(p.id)) wallets.set(p.id, { balance: 0, facility, patient: p.name, type: 'Refund Credit' })
+              if (!wallets.has(p.id)) wallets.set(p.id, { balance: 0, facility, patient: p.name, type: 'Refund to wallet' })
               pendingCreditIssues.push({ day: rd, pid: p.id, amount: amt, ref: inv.id })
             }
           }
         }
       } else if (r < 0.93) {
-        const first = Math.round((inv.net * (0.4 + rng.next() * 0.4)) / 100) * 100
+        const first = Math.round((due * (0.4 + rng.next() * 0.4)) / 100) * 100
         addPayment(day, payMin, inv, first, pickMethod())
         if (rng.chance(0.6)) {
           const d2 = day + rng.int(2, 35)
-          if (d2 <= endN) addPayment(d2, rng.int(540, 1020), inv, inv.net - first, pickMethod())
+          if (d2 <= endN) addPayment(d2, rng.int(540, 1020), inv, due - first, pickMethod())
         }
       } else if (rng.chance(0.62)) {
         const d2 = day + rng.int(1, 50)
-        if (d2 <= endN) addPayment(d2, rng.int(540, 1020), inv, inv.net, pickMethod())
+        if (d2 <= endN) addPayment(d2, rng.int(540, 1020), inv, due, pickMethod())
       }
     } else if (p.payerType === 'Corporate') {
       const key = `${p.payer}|${isoDay(day).slice(0, 7)}`
@@ -505,7 +600,7 @@ export function generateDb(): Db {
       }
       const sd = corpSettle.get(key)
       if (sd != null && sd <= endN) addPayment(sd, 660, inv, inv.net, 'Corporate Remittance', `REM-${p.payer.slice(0, 3).toUpperCase()}-${isoDay(day).slice(0, 7)}`)
-    } else {
+    } else if (p.payerType === 'HMO') {
       // HMO claim lifecycle
       const prof = hmoProfile[p.payer]
       const submitted = day + rng.int(2, 12)
@@ -583,6 +678,7 @@ export function generateDb(): Db {
   const beds = new Map<string, BedState>()
   WARDS.forEach((w) => beds.set(w.id, { freeAt: Array(w.beds).fill(0) }))
   const admissions: Admission[] = []
+  const depositOf = new Map<string, DepositAccount>()
   const transfers: Transfer[] = []
   let admSeq = 1
   const recentDischarges = new Map<string, { pid: string; day: number }[]>()
@@ -634,13 +730,13 @@ export function generateDb(): Db {
     for (const pc of pendingCreditIssues.filter((x) => x.day === day)) {
       creditTxn(day, 680, pc.pid, 'Issued', pc.amount, pc.ref, 'Finance – Receivables')
     }
-    const deposits = rng.poisson(1.1)
-    for (let i = 0; i < deposits; i++) {
+    const walletTopUps = rng.poisson(1.1)
+    for (let i = 0; i < walletTopUps; i++) {
       const f = rng.weighted(FACILITIES, FACILITIES.map((x) => x.weight))
       const pool = pools[f.id].adults
       const p = pool[rng.int(0, pool.length - 1)]
       if (p.payerType !== 'Self-pay') continue
-      if (!wallets.has(p.id)) wallets.set(p.id, { balance: 0, facility: f.id, patient: p.name, type: 'Prepaid Deposit' })
+      if (!wallets.has(p.id)) wallets.set(p.id, { balance: 0, facility: f.id, patient: p.name, type: 'Wallet top-up' })
       const amt = rng.pick([20000, 30000, 50000, 50000, 100000, 150000, 200000])
       creditTxn(day, rng.int(540, 960), p.id, 'Issued', amt, `DEP-${pad(crSeq, 6)}`, rng.pick(cashiers[f.id]))
       if (rng.chance(0.03)) {
@@ -653,7 +749,7 @@ export function generateDb(): Db {
         const f = rng.pick(FACILITIES)
         const p = pools[f.id].adults[rng.int(0, pools[f.id].adults.length - 1)]
         if (p.payerType !== 'Self-pay' || wallets.has(p.id)) continue
-        wallets.set(p.id, { balance: 0, facility: f.id, patient: p.name, type: 'Promotional Credit' })
+        wallets.set(p.id, { balance: 0, facility: f.id, patient: p.name, type: 'Promotional credit' })
         creditTxn(day, 540, p.id, 'Issued', rng.pick([5000, 7500, 10000]), `PROMO-${iso.slice(0, 7)}`, 'Marketing – Patient Experience')
       }
     }
@@ -686,6 +782,8 @@ export function generateDb(): Db {
         else {
           const pool = want === 'kid' ? pools[f.id].kids : want === 'woman' ? pools[f.id].women : pools[f.id].adults
           p = pool[rng.int(0, pool.length - 1)]
+          const holders = creditHolders.get(f.id) ?? []
+          if (want === 'adult' && holders.length && rng.chance(0.11)) p = rng.pick(holders)
         }
         const virtual = !isNew && ['General Outpatient', 'Internal Medicine', 'Paediatrics', 'Cardiology', 'Obstetrics & Gynaecology'].includes(dept) && rng.chance(0.08)
         const type: Visit['type'] = dept === 'Emergency' ? 'Emergency' : isNew ? (rng.chance(0.2) ? 'Referral' : 'New') : rng.weighted(['Follow-up', 'Review', 'Referral', 'New'] as const, [46, 30, 10, 14])
@@ -939,6 +1037,23 @@ export function generateDb(): Db {
           payer: p.payer,
           invoiceNo: '',
           billed: 0,
+          deposit: 0,
+        }
+        if (p.payerType === 'Self-pay' && rng.chance(0.86)) {
+          const base: Record<string, number> = { MED: 150000, SUR: 400000, MAT: dx.code === 'O80' ? 200000 : 450000, PAE: 100000, ICU: 500000, GEN: 100000 }
+          const collected = Math.round((base[kind] * rng.pick([1, 1, 1.5, 2])) / 50000) * 50000
+          const dep: DepositAccount = { id: `DEP-${pad(depSeq++, 5)}`, admissionId: adm.id, patientId: p.id, patient: p.name, facility: w.facility, ward: adm.ward, department: w.department, collectedOn: stampFromMin(admitMin + 25), collected, topUps: 0, applied: 0, refunded: 0, movedToWallet: 0, held: 0, billed: 0, balanceDue: 0, status: 'Held – patient admitted', invoiceNo: '' }
+          const method = rng.weighted(['POS / Card', 'Bank Transfer', 'Cash'], [45, 40, 15])
+          depositTxns.push({ id: `DTX-${pad(depTxnSeq++, 6)}`, date: dep.collectedOn, depositId: dep.id, admissionId: adm.id, patient: p.name, facility: w.facility, ward: adm.ward, type: 'Collected', amount: collected, method, by: rng.pick(cashiers[w.facility]) })
+          const topDay = Math.floor(admitMin / 1440) + 3
+          if (stayDays >= 5 && rng.chance(0.45) && topDay * 1440 + 600 <= NOW_MIN) {
+            const top = rng.pick([50000, 100000, 150000])
+            dep.topUps = top
+            depositTxns.push({ id: `DTX-${pad(depTxnSeq++, 6)}`, date: stampFromMin(topDay * 1440 + 600), depositId: dep.id, admissionId: adm.id, patient: p.name, facility: w.facility, ward: adm.ward, type: 'Top-up', amount: top, method: rng.pick(['POS / Card', 'Bank Transfer']), by: rng.pick(cashiers[w.facility]) })
+          }
+          adm.deposit = dep.collected + dep.topUps
+          deposits.push(dep)
+          depositOf.set(adm.id, dep)
         }
         admissions.push(adm)
         if (rng.chance(0.06) && discharged && losActual >= 2) {
@@ -959,7 +1074,7 @@ export function generateDb(): Db {
           if (kind === 'MAT') lines.push(dx.code === 'O80' ? { service: 'Normal vaginal delivery', category: 'Procedures', qty: 1, amount: 180000 } : { service: 'Caesarean section', category: 'Procedures', qty: 1, amount: 650000 })
           if (kind === 'SUR') lines.push(rng.pick([{ service: 'Appendicectomy', category: 'Procedures', qty: 1, amount: 450000 }, { service: 'Herniorrhaphy', category: 'Procedures', qty: 1, amount: 380000 }, { service: 'Laparoscopic cholecystectomy', category: 'Procedures', qty: 1, amount: 900000 }, { service: 'Excision biopsy', category: 'Procedures', qty: 1, amount: 220000 }]))
           if (kind === 'ICU') lines.push({ service: 'Critical care monitoring', category: 'Inpatient Services', qty: losActual, amount: losActual * 45000 })
-          const inv = createInvoice(dischargeDay, dischargeMin - dischargeDay * 1440, p, w.facility, w.department, lines, 'Inpatient')
+          const inv = createInvoice(dischargeDay, dischargeMin - dischargeDay * 1440, p, w.facility, w.department, lines, 'Inpatient', depositOf.get(adm.id))
           adm.invoiceNo = inv.id
           adm.billed = inv.net
         }
@@ -1032,6 +1147,46 @@ export function generateDb(): Db {
     else inv.status = 'Unpaid'
   }
   void invById
+
+  // ------------------------------------------------- deposits & credit
+  for (const d of deposits) {
+    const held = d.collected + d.topUps
+    if (!d.invoiceNo) d.held = held
+    const inv = d.invoiceNo ? invById.get(d.invoiceNo) : undefined
+    d.balanceDue = inv ? inv.balance : 0
+    d.status = !d.invoiceNo ? 'Held – patient admitted' : d.held > 0 ? 'Applied – refund pending' : d.refunded + d.movedToWallet > 0 ? 'Applied – excess refunded' : (inv?.net ?? 0) > held ? 'Applied – balance due' : 'Applied – fully used'
+  }
+  for (const inv of invoices) {
+    if (!inv.onCredit || inv.writtenOff <= 0) continue
+    const acc = creditByPatient.get(inv.patientId)
+    const wo = adjustments.find((a) => a.invoiceNo === inv.id && a.type === 'Write-off')
+    if (acc && wo) creditLedger.push({ id: `CLG-${pad(clSeq++, 6)}`, date: wo.date, accountId: acc.id, patient: acc.patient, facility: acc.facility, scheme: acc.scheme, type: 'Written off', amount: wo.amount, invoiceNo: inv.id, balanceAfter: 0, dueDate: inv.dueDate })
+  }
+  creditLedger.sort((a, b) => a.date.localeCompare(b.date))
+  for (const acc of creditFacilities) {
+    acc.charged = 0
+    acc.repaid = 0
+  }
+  const accById = new Map<string, CreditFacility & { written?: number }>(creditFacilities.map((a) => [a.id, a]))
+  for (const t of creditLedger) {
+    const a = accById.get(t.accountId)!
+    if (t.type === 'Charged to credit') a.charged += t.amount
+    else if (t.type === 'Repayment') a.repaid += t.amount
+    else a.written = (a.written ?? 0) + t.amount
+    t.balanceAfter = a.charged - a.repaid - (a.written ?? 0)
+    a.lastActivity = t.date
+  }
+  for (const a of creditFacilities) {
+    // Owed = open balances on the account's credit invoices (after any write-offs)
+    const open = invoices.filter((i) => i.onCredit && i.patientId === a.patientId && i.balance > 0)
+    a.owed = open.reduce((x, i) => x + i.balance, 0)
+    a.available = Math.max(0, a.limit - a.owed)
+    a.utilisation = a.owed / a.limit
+    a.owedPastTerms = open.filter((i) => i.dueDate < isoDay(TODAY_NUM)).reduce((x, i) => x + i.balance, 0)
+    a.oldestUnpaidDays = open.length ? Math.max(...open.map((i) => i.ageDays)) : 0
+    a.status = a.owed === 0 ? 'Clear' : a.owed > a.limit ? 'Over limit' : a.utilisation >= 0.8 ? 'Near limit' : 'Within limit'
+  }
+  depositTxns.sort((a, b) => a.date.localeCompare(b.date))
 
   // ------------------------------------------------------ ward census
   const wardDays: WardDay[] = []
@@ -1280,6 +1435,10 @@ export function generateDb(): Db {
     payments,
     adjustments,
     credits,
+    deposits,
+    depositTxns,
+    creditFacilities,
+    creditLedger,
     admissions,
     transfers,
     wardDays,

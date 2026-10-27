@@ -137,6 +137,7 @@ export interface Invoice {
   ageDays: number
   agingBucket: string
   lastPayment: string
+  onCredit: boolean
 }
 
 export interface Payment {
@@ -175,7 +176,7 @@ export interface CreditTxn {
   accountId: string
   patient: string
   facility: string
-  creditType: 'Prepaid Deposit' | 'Promotional Credit' | 'Refund Credit' | 'Corporate Credit'
+  creditType: 'Wallet top-up' | 'Promotional credit' | 'Refund to wallet'
   action: 'Issued' | 'Utilized' | 'Adjusted' | 'Reversed'
   amount: number
   balanceAfter: number
@@ -211,6 +212,7 @@ export interface Admission {
   payer: string
   invoiceNo: string
   billed: number
+  deposit: number
 }
 
 export interface Transfer {
@@ -398,6 +400,75 @@ export interface IntegrationRun {
   reconciled: 'Balanced' | 'Variance' | '—'
 }
 
+export interface DepositAccount {
+  id: string
+  admissionId: string
+  patientId: string
+  patient: string
+  facility: string
+  ward: string
+  department: string
+  collectedOn: string
+  collected: number
+  topUps: number
+  applied: number
+  refunded: number
+  movedToWallet: number
+  held: number
+  billed: number
+  balanceDue: number
+  status: 'Held – patient admitted' | 'Applied – fully used' | 'Applied – excess refunded' | 'Applied – refund pending' | 'Applied – balance due'
+  invoiceNo: string
+}
+
+export interface DepositTxn {
+  id: string
+  date: string
+  depositId: string
+  admissionId: string
+  patient: string
+  facility: string
+  ward: string
+  type: 'Collected' | 'Top-up' | 'Applied to bill' | 'Refunded' | 'Moved to wallet'
+  amount: number
+  method: string
+  by: string
+}
+
+export interface CreditFacility {
+  id: string
+  patientId: string
+  patient: string
+  facility: string
+  scheme: 'Staff & dependants' | 'Chronic care plan' | 'Approved individual' | 'Community scheme'
+  limit: number
+  openedOn: string
+  approvedBy: string
+  charged: number
+  repaid: number
+  owed: number
+  available: number
+  utilisation: number
+  oldestUnpaidDays: number
+  owedPastTerms: number
+  lastActivity: string
+  status: 'Within limit' | 'Near limit' | 'Over limit' | 'Clear'
+}
+
+export interface CreditLedgerTxn {
+  id: string
+  date: string
+  accountId: string
+  patient: string
+  facility: string
+  scheme: string
+  type: 'Charged to credit' | 'Repayment' | 'Written off'
+  amount: number
+  invoiceNo: string
+  balanceAfter: number
+  dueDate: string
+}
+
 export interface Db {
   generatedAt: string
   patients: Patient[]
@@ -409,6 +480,10 @@ export interface Db {
   payments: Payment[]
   adjustments: Adjustment[]
   credits: CreditTxn[]
+  deposits: DepositAccount[]
+  depositTxns: DepositTxn[]
+  creditFacilities: CreditFacility[]
+  creditLedger: CreditLedgerTxn[]
   admissions: Admission[]
   transfers: Transfer[]
   wardDays: WardDay[]

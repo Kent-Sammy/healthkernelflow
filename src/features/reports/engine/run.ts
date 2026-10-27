@@ -89,7 +89,7 @@ export function configPeriod(c: ReportConfig): Period {
 }
 
 /** Status-as-of-today measures: comparing with an earlier period is misleading. */
-const NO_DELTA = new Set(['perDay', 'pending', 'avgPendingAge', 'current', 'outstanding', 'balance', 'openCount', 'overdue', 'overdueCount', 'avgAge', 'over90', 'avgDaysIn'])
+const NO_DELTA = new Set(['perDay', 'opening', 'closing', 'pending', 'avgPendingAge', 'current', 'outstanding', 'balance', 'openCount', 'overdue', 'overdueCount', 'avgAge', 'over90', 'avgDaysIn'])
 
 const ORDERED_DIMS = new Set(['month', 'hour', 'weekday', 'ageBand', 'agingBucket', 'waitBand', 'losBand', 'delayBand', 'expiryBand', 'utilBand'])
 
