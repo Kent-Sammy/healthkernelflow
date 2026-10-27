@@ -6,10 +6,13 @@ A front-end-only, interactive prototype of HealthKernel's reporting module, buil
 
 ### Run it
 
+Requires Node.js 20.19+ or 22.12+ (`node -v` to check; `nvm use` picks up `.nvmrc`).
+
 ```bash
+git checkout claude/charming-rubin-5t33ww   # the reports module lives on this branch
 npm install
 npm run dev
-# open http://localhost:5173/reports
+# open http://localhost:5173/reports   (the bare http://localhost:5173 opens the pricing page)
 ```
 
 `npm run build && npm run preview` serves the production build at http://localhost:4173/reports. The existing pricing pages are unchanged at `/pricing`.
