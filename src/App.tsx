@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { Toaster } from '@/components/ui/Toast'
 import { ComponentShowcase } from '@/pages/dev/ComponentShowcase'
@@ -5,6 +6,9 @@ import { PricingPage } from '@/pages/pricing/PricingPage'
 import { GetStartedPlaceholder } from '@/pages/placeholders/GetStartedPlaceholder'
 import { CustomPlaceholder } from '@/pages/placeholders/CustomPlaceholder'
 import { HelpMeChoosePlaceholder } from '@/pages/placeholders/HelpMeChoosePlaceholder'
+
+// Reports & Analytics prototype — lazy-loaded so the pricing bundle stays small.
+const ReportsApp = lazy(() => import('@/features/reports/ReportsApp'))
 
 /**
  * PHASE 2 (Pricing): the commercial surface starts at `/pricing`.
@@ -23,6 +27,14 @@ export default function App() {
         <Route path="/custom" element={<CustomPlaceholder />} />
         <Route path="/help-me-choose" element={<HelpMeChoosePlaceholder />} />
         <Route path="/dev/components" element={<ComponentShowcase />} />
+        <Route
+          path="/reports/*"
+          element={
+            <Suspense fallback={<div className="flex h-dvh items-center justify-center text-sm text-neutral-500">Loading Reports &amp; Analytics…</div>}>
+              <ReportsApp />
+            </Suspense>
+          }
+        />
       </Routes>
       <Toaster />
     </>
